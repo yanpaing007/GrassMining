@@ -363,35 +363,28 @@ Nonce: {timestamp}"""
         device_info = await self.get_device_info(device_id, user_id)
         return device_info['data']['final_score']
 
-    async def get_json_params(self, params, user_referral: str, main_referral: str = "erxggzon61FWrJ9",
-                              role_stable: str = "726566657272616c"):
+    async def get_json_params(self, params, user_referral: str, main_referral: str = "A8lArywTj9JnKL9"):
         self.username = Person().username
 
         referrals = {
-            "my_refferral": main_referral,
-            "user_refferal": user_referral
+            "my_referral": main_referral,
+            "user_referral": user_referral
         }
 
         json_data = {
             'email': self.email,
-            'password': self.password,
+            'password': self.password, 
             'role': 'USER',
-            'referral': random.choice(list(referrals.items())),
             'username': self.username,
             'recaptchaToken': "",
-            'listIds': [
-                15,
-            ],
+            'listIds': [15],
         }
 
         captcha_service = CaptchaService()
         json_data['recaptchaToken'] = await captcha_service.get_captcha_token_async()
 
-        json_data.pop(bytes.fromhex(role_stable).decode("utf-8"), None)
-        json_data[bytes.fromhex('726566657272616c436f6465').decode("utf-8")] = (
-            random.choice([random.choice(ast.literal_eval(bytes.fromhex(loguru).decode("utf-8"))),
-                           referrals[bytes.fromhex('757365725f726566666572616c').decode("utf-8")] or
-                           random.choice(ast.literal_eval(bytes.fromhex(loguru).decode("utf-8")))]))
+        available_referrals = [main_referral, user_referral]
+        json_data['referralCode'] = random.choice(available_referrals)
 
         return json_data
 
