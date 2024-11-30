@@ -5,6 +5,7 @@ import random
 import sys
 import traceback
 
+import aiohttp
 from art import text2art
 from imap_tools import MailboxLoginError
 from termcolor import colored, cprint
@@ -38,7 +39,7 @@ def bot_info(name: str = ""):
 async def worker_task(_id, account: str, proxy: str = None, wallet: str = None, db: AccountsDB = None):
     consumables = account.split(":")[:3]
     imap_pass = None
-    
+
     if SINGLE_IMAP_ACCOUNT:
         consumables.append(SINGLE_IMAP_ACCOUNT.split(":")[1])
 
@@ -109,11 +110,14 @@ async def worker_task(_id, account: str, proxy: str = None, wallet: str = None, 
     #     logger.warning(e)
     except EmailApproveLinkNotFoundException as e:
         logger.warning(e)
+    except aiohttp.ClientError as e:
+        logger.warning(f"{_id} | Some connection error: {e}...")
     except Exception as e:
         logger.error(f"{_id} | not handled exception | error: {e} {traceback.format_exc()}")
     finally:
         if grass:
             await grass.session.close()
+            # await grass.ws_session.close()
 
 
 async def main():
@@ -147,7 +151,7 @@ async def main():
     autoreger = AutoReger.get_accounts(
         (ACCOUNTS_FILE_PATH, PROXIES_FILE_PATH, WALLETS_FILE_PATH),
         with_id=True,
-        static_extra=(db, )
+        static_extra=(db,)
     )
 
     threads = THREADS
@@ -164,7 +168,8 @@ async def main():
                 logger.error("Wallets count != accounts count")
                 return
         elif len(accounts[0].split(":")) != 3:
-            logger.error("For __APPROVE__ mode: Need to provide email, password and imap password - email:password:imap_password")
+            logger.error(
+                "For __APPROVE__ mode: Need to provide email, password and imap password - email:password:imap_password")
             return
 
         msg = "__APPROVE__ MODE"
@@ -189,5 +194,5 @@ if __name__ == "__main__":
         loop = asyncio.ProactorEventLoop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(main())
-    else:
-        asyncio.run(main())
+
+    asyncio.run(main())

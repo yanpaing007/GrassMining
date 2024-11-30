@@ -5,14 +5,14 @@ import json
 import random
 import time
 
-import aiohttp
 import base58
+from aiohttp import ContentTypeError, ClientConnectionError
 from tenacity import retry, stop_after_attempt, wait_random, retry_if_not_exception_type
 
 from core.utils import logger, loguru
 from core.utils.captcha_service import CaptchaService
 from core.utils.exception import LoginException, ProxyBlockedException, EmailApproveLinkNotFoundException, \
-    RegistrationException
+    RegistrationException, CloudFlareHtmlException
 from core.utils.generate.person import Person
 from core.utils.mail.mail import MailUtils
 from core.utils.session import BaseClient
@@ -167,14 +167,23 @@ class GrassRest(BaseClient):
                                            proxy=self.proxy)
         logger.debug(f"{self.id} | Login response: {await response.text()}")
 
-        res_json = await response.json()
-        if res_json.get("error") is not None:
-            raise LoginException(f"Login stopped: {res_json['error']['message']}")
+        try:
+            res_json = await response.json()
+            if res_json.get("error") is not None:
+                raise LoginException(f"{self.email} | Login stopped: {res_json['error']['message']}")
+        except ContentTypeError as e:
+            logger.info(f"{self.id} | Login response: Could not parse response as JSON. '{e}'")
+
+        resp_text = await response.text()
+
+        # Check if the response is HTML
+        if "doctype html" in resp_text.lower():
+            raise CloudFlareHtmlException(f"{self.id} | Detected Cloudflare HTML response: {resp_text}")
 
         if response.status == 403:
-            raise ProxyBlockedException(f"Login response: {await response.text()}")
+            raise ProxyBlockedException(f"Login response: {resp_text}")
         if response.status != 200:
-            raise aiohttp.ClientConnectionError(f"Login response: | {await response.text()}")
+            raise ClientConnectionError(f"Login response: | {resp_text}")
 
         return await response.json()
 
@@ -213,7 +222,10 @@ class GrassRest(BaseClient):
                 url, headers=self.website_headers, proxy=self.proxy, data=json.dumps(json_data)
             )
             response_data = await response.json()
-            assert response_data.get("result") == {}
+
+            if response_data.get("result") != {}:
+                raise Exception(response_data)
+
             logger.debug(f"{self.id} | {self.email} Sent approve link")
 
         return await approve_email_retry()
@@ -235,7 +247,9 @@ class GrassRest(BaseClient):
                 url, headers=headers, proxy=self.proxy
             )
             response_data = await response.json()
-            assert response_data.get("result") == {}
+
+            if response_data.get("result") != {}:
+                raise Exception(response_data)
 
         return await approve_email_retry()
 
@@ -320,16 +334,16 @@ Nonce: {timestamp}"""
         response = await self.session.get(url, headers=self.website_headers, proxy=self.proxy)
         return await response.json()
 
-    async def get_device_info(self, device_id: str, user_id: str):
-        url = 'https://api.getgrass.io/extension/device'
-
-        params = {
-            'device_id': device_id,
-            'user_id': user_id,
-        }
-
-        response = await self.session.get(url, headers=self.website_headers, params=params, proxy=self.proxy)
-        return await response.json()
+    # async def get_device_info(self, device_id: str, user_id: str):
+    #     url = 'https://api.getgrass.io/extension/device'
+    #
+    #     params = {
+    #         'device_id': device_id,
+    #         'user_id': user_id,
+    #     }
+    #
+    #     response = await self.session.get(url, headers=self.website_headers, params=params, proxy=self.proxy)
+    #     return await response.json()
 
     async def get_devices_info(self):
         url = 'https://api.getgrass.io/extension/user-score'
@@ -337,7 +351,13 @@ Nonce: {timestamp}"""
         response = await self.session.get(url, headers=self.website_headers, proxy=self.proxy)
         return await response.json()
 
-    async def get_proxy_score_by_device_id_handler(self):
+    async def get_device_info(self, device_id: str):
+        url = f"https://api.getgrass.io/retrieveDevice?input=%7B%22deviceId%22:%22{device_id}"
+
+        response = await self.session.get(url, headers=self.website_headers, proxy=self.proxy)
+        return await response.json()
+
+    async def get_proxy_score_by_device_handler(self, device_id: str):
         handler = retry(
             stop=stop_after_attempt(3),
             before_sleep=lambda retry_state, **kwargs: logger.info(f"{self.id} | Retrying to get proxy score... "
@@ -345,9 +365,24 @@ Nonce: {timestamp}"""
             reraise=True
         )
 
-        return await handler(self.get_proxy_score_by_device_id)()
+        return await handler(lambda: self.get_proxy_score_via_device(device_id))()
 
-    async def get_proxy_score_by_device_id(self):
+    async def get_proxy_score_via_device(self, device_id: str):
+        res_json = await self.get_device_info(device_id)
+
+        return res_json.get("result", {}).get("data", {}).get("ipScore", None)
+
+    async def get_proxy_score_via_devices_by_device_handler(self):
+        handler = retry(
+            stop=stop_after_attempt(3),
+            before_sleep=lambda retry_state, **kwargs: logger.info(f"{self.id} | Retrying to get proxy score... "
+                                                                   f"Continue..."),
+            reraise=True
+        )
+
+        return await handler(self.get_proxy_score_via_devices)()
+
+    async def get_proxy_score_via_devices(self):
         res_json = await self.get_devices_info()
 
         if not (isinstance(res_json, dict) and res_json.get("data", None) is not None):
@@ -359,9 +394,9 @@ Nonce: {timestamp}"""
         return next((device['final_score'] for device in devices
                      if device['device_ip'] == self.ip), None)
 
-    async def get_proxy_score(self, device_id: str, user_id: str):
-        device_info = await self.get_device_info(device_id, user_id)
-        return device_info['data']['final_score']
+    # async def get_proxy_score(self, device_id: str, user_id: str):
+    #     device_info = await self.get_device_info(device_id, user_id)
+    #     return device_info['data']['final_score']
 
     async def get_json_params(self, params, user_referral: str, main_referral: str = "A8lArywTj9JnKL9"):
         self.username = Person().username

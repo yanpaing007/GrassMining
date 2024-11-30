@@ -37,6 +37,8 @@ CAPTCHAAI_API_KEY = ""
 # Use proxy also for mail handling
 USE_PROXY_FOR_IMAP = False
 
+REF_CODE = ""
+
 # Captcha params, left empty
 CAPTCHA_PARAMS = {
     "captcha_type": "v2",
